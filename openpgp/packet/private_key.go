@@ -30,35 +30,44 @@ import (
 // PrivateKey represents a possibly encrypted private key. See RFC 4880,
 // section 5.5.3.
 type PrivateKey struct {
+	// 5.5.3 fields
 	PublicKey
-	Encrypted     bool // if true then the private key is unavailable until Decrypt has been called.
+	s2kType
+	s2kCount         byte // Version 5 only
+
+	// Optional fields
+	cipher           CipherFunction
+	mode             AEADMode
+	s2k              func(out, in []byte)
+	iv               []byte
+
+	keyMaterialCount [4]byte // Version 5 only
 	encryptedData []byte
-	cipher        CipherFunction
-	s2k           func(out, in []byte)
+	Encrypted     bool // if true then the private key is unavailable until Decrypt has been called.
+
 	// An *{rsa|dsa|elgamal|ecdh|ecdsa|ed25519}.PrivateKey or
 	// crypto.Signer/crypto.Decrypter (Decryptor RSA only).
 	PrivateKey   interface{}
 	sha1Checksum bool
-	iv           []byte
 
-	// Type of encryption of the S2K packet
-	// Allowed values are 0 (Not encrypted), 254 (SHA1), or
-	// 255 (2-byte checksum)
-	s2kType S2KType
 	// Full parameters of the S2K packet
 	s2kParams *s2k.Params
 }
 
-//S2KType s2k packet type
-type S2KType uint8
+// Version is inherited from the corresponding PublicKey
+func (pk *PrivateKey) Version() int {
+	return pk.PublicKey.Version
+}
+
+// Type of encryption of the S2K packet
+// Allowed values are 0 (Not encrypted), 254 (SHA1), or
+// 255 (2-byte checksum)
+type s2kType uint8
 
 const (
-	// S2KNON unencrypt
-	S2KNON S2KType = 0
-	// S2KSHA1 sha1 sum check
-	S2KSHA1 S2KType = 254
-	// S2KCHECKSUM sum check
-	S2KCHECKSUM S2KType = 255
+	s2kNonEncrypted s2kType = 0 // Unencrypted
+	s2kSHA1         s2kType = 254
+	s2kChecksum     s2kType = 255 // Forbidden for v5 keys
 )
 
 func NewRSAPrivateKey(creationTime time.Time, priv *rsa.PrivateKey) *PrivateKey {
@@ -132,19 +141,22 @@ func (pk *PrivateKey) parse(r io.Reader) (err error) {
 	if err != nil {
 		return
 	}
+	version5 := pk.PublicKey.Version == 5
 	var buf [1]byte
-	_, err = readFull(r, buf[:])
-	if err != nil {
+	if _, err = readFull(r, buf[:]); err != nil {
 		return
 	}
 
-	pk.s2kType = S2KType(buf[0])
+	if version5 && buf[0] == 255 {
+		return errors.StructuralError("V5 keys MUST NOT use 2-byte checksums")
+	}
+	pk.s2kType = s2kType(buf[0])
 
 	switch pk.s2kType {
-	case S2KNON:
+	case s2kNonEncrypted:
 		pk.s2k = nil
 		pk.Encrypted = false
-	case S2KSHA1, S2KCHECKSUM:
+	case s2kSHA1, s2kChecksum:
 		_, err = readFull(r, buf[:])
 		if err != nil {
 			return
@@ -162,7 +174,7 @@ func (pk *PrivateKey) parse(r io.Reader) (err error) {
 			return
 		}
 		pk.Encrypted = true
-		if pk.s2kType == S2KSHA1 {
+		if pk.s2kType == s2kSHA1 {
 			pk.sha1Checksum = true
 		}
 
@@ -222,7 +234,7 @@ func (pk *PrivateKey) Serialize(w io.Writer) (err error) {
 	} else {
 		err = pk.serializeUnencrypted(privateKeyBuf)
 	}
-	
+
 	if err != nil {
 		return
 	}
@@ -278,7 +290,7 @@ func (pk *PrivateKey) serializeEncrypted(w io.Writer) error {
 
 func (pk *PrivateKey) serializeUnencrypted(w io.Writer) (err error) {
 	buf := bytes.NewBuffer(nil)
-	buf.Write([]byte{uint8(S2KNON)} /* no encryption */)
+	buf.Write([]byte{uint8(s2kNonEncrypted)})
 	err = pk.serializePrivateKey(buf)
 	if err != nil {
 		return err
@@ -421,13 +433,13 @@ func (pk *PrivateKey) Encrypt(passphrase []byte) error {
 	cfb := cipher.NewCFBEncrypter(block, pk.iv)
 
 	if pk.sha1Checksum {
-		pk.s2kType = S2KSHA1
+		pk.s2kType = s2kSHA1
 		h := sha1.New()
 		h.Write(privateKeyBytes)
 		sum := h.Sum(nil)
 		privateKeyBytes = append(privateKeyBytes, sum...)
 	} else {
-		pk.s2kType = S2KCHECKSUM
+		pk.s2kType = s2kChecksum
 		var sum uint16
 		for i := 0; i < len(privateKeyBytes); i++ {
 			sum += uint16(privateKeyBytes[i])
