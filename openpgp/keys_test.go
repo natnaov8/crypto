@@ -12,6 +12,12 @@ import (
 	"golang.org/x/crypto/openpgp/packet"
 )
 
+func TestKeyInconsistentVersions(t *testing.T) {
+	// TODO: Embed a public key in a private key with different versions and
+	// fail to parse
+	t.Fail()
+}
+
 func TestKeyExpiry(t *testing.T) {
 	kring, err := ReadKeyRing(readerFromHex(expiringKeyHex))
 	if err != nil {

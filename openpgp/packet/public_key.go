@@ -10,7 +10,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/sha1"
-	_ "crypto/sha256"
+	"crypto/sha256"
 	_ "crypto/sha512"
 	"encoding/binary"
 	"fmt"
@@ -39,7 +39,7 @@ type PublicKey struct {
 	Version          int
 	CreationTime     time.Time
 	PubKeyAlgo       PublicKeyAlgorithm
-	keyMaterialCount int         // Version 5 only
+	keyMaterialCount uint32         // Version 5 only
 	PublicKey        interface{} // *rsa.PublicKey, *dsa.PublicKey or *ecdsa.PublicKey
 
 	// RSA fields (5.6.1)
@@ -61,15 +61,25 @@ type PublicKey struct {
 func (pk *PublicKey) parse(r io.Reader) (err error) {
 	// RFC 4880, section 5.5.2
 	var buf [6]byte
-	_, err = readFull(r, buf[:])
-	if err != nil {
+	if _, err = readFull(r, buf[:]); err != nil {
 		return
 	}
-	if buf[0] != 4 {
+	if buf[0] != 4 && buf[0] != 5 {
 		return errors.UnsupportedError("public key version")
 	}
+	pk.Version = int(buf[0])
 	pk.CreationTime = time.Unix(int64(uint32(buf[1])<<24|uint32(buf[2])<<16|uint32(buf[3])<<8|uint32(buf[4])), 0)
+
 	pk.PubKeyAlgo = PublicKeyAlgorithm(buf[5])
+
+	if pk.Version == 5 {
+		var octetCount [4]byte
+		if _, err = readFull(r, octetCount[:]); err != nil {
+			return
+		}
+		pk.keyMaterialCount = binary.BigEndian.Uint32(octetCount[:])
+	}
+
 	switch pk.PubKeyAlgo {
 	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly, PubKeyAlgoRSASignOnly:
 		err = pk.parseRSA(r)
@@ -95,39 +105,17 @@ func (pk *PublicKey) parse(r io.Reader) (err error) {
 }
 
 func (pk *PublicKey) Serialize(w io.Writer) (err error) {
-	length := 6 // 6 byte header
-
-	switch pk.PubKeyAlgo {
-	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly, PubKeyAlgoRSASignOnly:
-		length += int(pk.n.EncodedLength())
-		length += int(pk.e.EncodedLength())
-	case PubKeyAlgoDSA:
-		length += int(pk.p.EncodedLength())
-		length += int(pk.q.EncodedLength())
-		length += int(pk.g.EncodedLength())
-		length += int(pk.y.EncodedLength())
-	case PubKeyAlgoElGamal:
-		length += int(pk.p.EncodedLength())
-		length += int(pk.g.EncodedLength())
-		length += int(pk.y.EncodedLength())
-	case PubKeyAlgoECDSA:
-		length += int(pk.oid.EncodedLength())
-		length += int(pk.p.EncodedLength())
-	case PubKeyAlgoECDH:
-		length += int(pk.oid.EncodedLength())
-		length += int(pk.p.EncodedLength())
-		length += int(pk.kdf.EncodedLength())
-	case PubKeyAlgoEdDSA:
-		length += int(pk.oid.EncodedLength())
-		length += int(pk.p.EncodedLength())
-	default:
-		panic("unknown public key algorithm")
-	}
-
 	packetType := packetTypePublicKey
 	if pk.IsSubkey {
 		packetType = packetTypePublicSubkey
 	}
+
+	length := 6 // version, timestamp, public key algorithm
+	if pk.Version == 5 {
+		length += 4 // key-material count
+	}
+	length += pk.octetCountAlgorithmicSpecific()
+
 	err = serializeHeader(w, packetType, length)
 	if err != nil {
 		return
@@ -253,10 +241,20 @@ func NewEdDSAPublicKey(creationTime time.Time, pub ed25519.PublicKey) *PublicKey
 
 func (pk *PublicKey) setFingerPrintAndKeyId() {
 	// RFC 4880, section 12.2
-	fingerPrint := sha1.New()
-	pk.SerializeForHash(fingerPrint)
-	copy(pk.Fingerprint[:], fingerPrint.Sum(nil))
-	pk.KeyId = binary.BigEndian.Uint64(pk.Fingerprint[12:20])
+	switch pk.Version {
+	case 4:
+		fingerPrint := sha1.New()
+		pk.SerializeForHash(fingerPrint)
+		pk.Fingerprint = make([]byte, 20)
+		copy(pk.Fingerprint[:], fingerPrint.Sum(nil))
+		pk.KeyId = binary.BigEndian.Uint64(pk.Fingerprint[12:20])
+	case 5:
+		fingerPrint := sha256.New()
+		pk.SerializeForHash(fingerPrint)
+		pk.Fingerprint = make([]byte, 32)
+		copy(pk.Fingerprint[:], fingerPrint.Sum(nil))
+		pk.KeyId = binary.BigEndian.Uint64(pk.Fingerprint[:8])
+	}
 }
 
 // parseRSA parses RSA public key material from the given Reader. See RFC 4880,
@@ -461,58 +459,88 @@ func (pk *PublicKey) SerializeForHash(w io.Writer) error {
 	return pk.serializeWithoutHeaders(w)
 }
 
-// SerializeSignaturePrefix writes the prefix for this public key to the given Writer.
-// The prefix is used when calculating a signature over this public key. See
-// RFC 4880, section 5.2.4.
+// SerializeSignaturePrefix writes the prefix for this public key to the given
+// Writer. The prefix is used when calculating a signature over this public
+// key. See RFC 4880, section 5.2.4.
 func (pk *PublicKey) SerializeSignaturePrefix(w io.Writer) {
-	var pLength uint16
+	switch pk.Version {
+	case 5:
+		pLength := uint32(10) + uint32(pk.octetCountAlgorithmicSpecific())
+		w.Write([]byte{
+			0x9A,
+			byte(pLength >> 24),
+			byte(pLength >> 16),
+			byte(pLength >> 8),
+			byte(pLength),
+		})
+	default:  // Default to version 4
+		pLength := uint16(6) + uint16(pk.octetCountAlgorithmicSpecific())
+		w.Write([]byte{0x99, byte(pLength >> 8), byte(pLength)})
+	}
+}
+
+func (pk *PublicKey) octetCountAlgorithmicSpecific() int {
+	var count uint16
 	switch pk.PubKeyAlgo {
 	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly, PubKeyAlgoRSASignOnly:
-		pLength += pk.n.EncodedLength()
-		pLength += pk.e.EncodedLength()
+		count += pk.n.EncodedLength()
+		count += pk.e.EncodedLength()
 	case PubKeyAlgoDSA:
-		pLength += pk.p.EncodedLength()
-		pLength += pk.q.EncodedLength()
-		pLength += pk.g.EncodedLength()
-		pLength += pk.y.EncodedLength()
+		count += pk.p.EncodedLength()
+		count += pk.q.EncodedLength()
+		count += pk.g.EncodedLength()
+		count += pk.y.EncodedLength()
 	case PubKeyAlgoElGamal:
-		pLength += pk.p.EncodedLength()
-		pLength += pk.g.EncodedLength()
-		pLength += pk.y.EncodedLength()
+		count += pk.p.EncodedLength()
+		count += pk.g.EncodedLength()
+		count += pk.y.EncodedLength()
 	case PubKeyAlgoECDSA:
-		pLength += pk.oid.EncodedLength()
-		pLength += pk.p.EncodedLength()
+		count += pk.oid.EncodedLength()
+		count += pk.p.EncodedLength()
 	case PubKeyAlgoECDH:
-		pLength += pk.oid.EncodedLength()
-		pLength += pk.p.EncodedLength()
-		pLength += pk.kdf.EncodedLength()
+		count += pk.oid.EncodedLength()
+		count += pk.p.EncodedLength()
+		count += pk.kdf.EncodedLength()
 	case PubKeyAlgoEdDSA:
-		pLength += pk.oid.EncodedLength()
-		pLength += pk.p.EncodedLength()
+		count += pk.oid.EncodedLength()
+		count += pk.p.EncodedLength()
 	default:
 		panic("unknown public key algorithm")
 	}
-	pLength += 6
-	w.Write([]byte{0x99, byte(pLength >> 8), byte(pLength)})
-	return
+	return int(count)
 }
 
 // serializeWithoutHeaders marshals the PublicKey to w in the form of an
 // OpenPGP public key packet, not including the packet header.
 func (pk *PublicKey) serializeWithoutHeaders(w io.Writer) (err error) {
-	var buf [6]byte
-	buf[0] = 4
 	t := uint32(pk.CreationTime.Unix())
-	buf[1] = byte(t >> 24)
-	buf[2] = byte(t >> 16)
-	buf[3] = byte(t >> 8)
-	buf[4] = byte(t)
-	buf[5] = byte(pk.PubKeyAlgo)
-
-	_, err = w.Write(buf[:])
-	if err != nil {
+	buf := [6]byte {
+		byte(pk.Version),
+		byte(t >> 24),
+		byte(t >> 16),
+		byte(t >> 8),
+		byte(t),
+		byte(pk.PubKeyAlgo),
+	}
+	if _, err = w.Write(buf[:]); err != nil {
 		return
 	}
+
+	if pk.Version == 5 {
+		kmCount := [4]byte {
+			byte(pk.keyMaterialCount >> 24),
+			byte(pk.keyMaterialCount >> 16),
+			byte(pk.keyMaterialCount >> 8),
+			byte(pk.keyMaterialCount),
+		}
+		if _, err = w.Write(kmCount[:]); err != nil {
+			return
+		}
+	}
+	return pk.writeAlgorithmSpecificValues(w)
+}
+
+func (pk *PublicKey) writeAlgorithmSpecificValues(w io.Writer) (err error) {
 
 	switch pk.PubKeyAlgo {
 	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly, PubKeyAlgoRSASignOnly:
@@ -520,7 +548,6 @@ func (pk *PublicKey) serializeWithoutHeaders(w io.Writer) (err error) {
 			return
 		}
 		_, err = w.Write(pk.e.EncodedBytes())
-		return
 	case PubKeyAlgoDSA:
 		if _, err = w.Write(pk.p.EncodedBytes()); err != nil {
 			return
@@ -532,7 +559,6 @@ func (pk *PublicKey) serializeWithoutHeaders(w io.Writer) (err error) {
 			return
 		}
 		_, err = w.Write(pk.y.EncodedBytes())
-		return
 	case PubKeyAlgoElGamal:
 		if _, err = w.Write(pk.p.EncodedBytes()); err != nil {
 			return
@@ -541,13 +567,11 @@ func (pk *PublicKey) serializeWithoutHeaders(w io.Writer) (err error) {
 			return
 		}
 		_, err = w.Write(pk.y.EncodedBytes())
-		return
 	case PubKeyAlgoECDSA:
 		if _, err = w.Write(pk.oid.EncodedBytes()); err != nil {
 			return
 		}
 		_, err = w.Write(pk.p.EncodedBytes())
-		return
 	case PubKeyAlgoECDH:
 		if _, err = w.Write(pk.oid.EncodedBytes()); err != nil {
 			return
@@ -556,15 +580,15 @@ func (pk *PublicKey) serializeWithoutHeaders(w io.Writer) (err error) {
 			return
 		}
 		_, err = w.Write(pk.kdf.EncodedBytes())
-		return
 	case PubKeyAlgoEdDSA:
 		if _, err = w.Write(pk.oid.EncodedBytes()); err != nil {
 			return
 		}
 		_, err = w.Write(pk.p.EncodedBytes())
-		return
+	default:
+		err = errors.InvalidArgumentError("bad public-key algorithm")
 	}
-	return errors.InvalidArgumentError("bad public-key algorithm")
+	return
 }
 
 // CanSign returns true iff this public key can generate signatures
@@ -761,12 +785,13 @@ func userIdSignatureHash(id string, pk *PublicKey, hashFunc crypto.Hash) (h hash
 	pk.SerializeSignaturePrefix(h)
 	pk.serializeWithoutHeaders(h)
 
-	var buf [5]byte
-	buf[0] = 0xb4
-	buf[1] = byte(len(id) >> 24)
-	buf[2] = byte(len(id) >> 16)
-	buf[3] = byte(len(id) >> 8)
-	buf[4] = byte(len(id))
+	buf := [5]byte{
+		0xb4,
+		byte(len(id) >> 24),
+		byte(len(id) >> 16),
+		byte(len(id) >> 8),
+		byte(len(id)),
+	}
 	h.Write(buf[:])
 	h.Write([]byte(id))
 

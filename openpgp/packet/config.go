@@ -7,15 +7,16 @@ package packet
 import (
 	"crypto"
 	"crypto/rand"
-	"math/big"
 	"io"
+	"math/big"
 	"time"
-
 )
 
 // Config collects a number of parameters along with sensible defaults.
 // A nil *Config is valid and results in all default values.
 type Config struct {
+	// Version of key packets. If not given (or zero), version 4 is used.
+	DefaultKeyVersion int
 	// Rand provides the source of entropy.
 	// If nil, the crypto/rand Reader is used.
 	Rand io.Reader
@@ -61,6 +62,13 @@ type Config struct {
 	// **Note: using this option may break compatibility with other OpenPGP
 	// implementations, as well as future versions of this library.**
 	AEADConfig *AEADConfig
+}
+
+func (c *Config) KeyVersion() int {
+	if c != nil && c.DefaultKeyVersion == 5 {
+		return 5
+	}
+	return 4
 }
 
 func (c *Config) Random() io.Reader {

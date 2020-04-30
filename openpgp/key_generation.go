@@ -105,6 +105,7 @@ func NewEntity(name, comment, email string, config *packet.Config) (*Entity, err
 		return nil, errors.InvalidArgumentError("unsupported public key algorithm")
 	}
 
+	pubPrimary.Version = config.KeyVersion()
 	e := &Entity{
 		PrimaryKey: pubPrimary,
 		PrivateKey: privPrimary,
@@ -152,6 +153,7 @@ func NewEntity(name, comment, email string, config *packet.Config) (*Entity, err
 		return nil, err
 	}
 
+	pubSubkey.Version = config.KeyVersion()
 	e.Subkeys = make([]Subkey, 1)
 	e.Subkeys[0] = Subkey{
 		PublicKey:  pubSubkey,

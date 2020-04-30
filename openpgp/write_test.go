@@ -71,9 +71,9 @@ func TestSignDetachedP256(t *testing.T) {
 	testDetachedSignature(t, kring, out, signedInput, "check", testKeyP256KeyId)
 }
 
-func TestNewEntity(t *testing.T) {
+func TestNewEntityNilConfig(t *testing.T) {
 
-	// Check bit-length with no config.
+	// Check bit-length
 	e, err := NewEntity("Test User", "test", "test@example.com", nil)
 	if err != nil {
 		t.Errorf("failed to create entity: %s", err)
@@ -86,15 +86,55 @@ func TestNewEntity(t *testing.T) {
 	if int(bl) != defaultRSAKeyBits {
 		t.Errorf("BitLength %v, expected %v", int(bl), defaultRSAKeyBits)
 	}
+	// Check version
+	if e.PrimaryKey.Version != 4 {
+		t.Errorf("got key version %v, expected %v", e.PrimaryKey.Version, 4)
+	}
+	for _, key := range e.Subkeys {
+		if key.PublicKey.Version != e.PrimaryKey.Version {
+			t.Errorf("Subkeys are inconsistent with primary key")
+		}
+	}
+
+	// Serialize & Reparse
+
+	w := bytes.NewBuffer(nil)
+	if err := e.SerializePrivate(w, nil); err != nil {
+		t.Errorf("failed to serialize entity: %s", err)
+		return
+	}
+	serialized := w.Bytes()
+
+	el, err := ReadKeyRing(w)
+	if err != nil {
+		t.Errorf("failed to reparse entity: %s", err)
+		return
+	}
+
+	if len(el) != 1 {
+		t.Errorf("wrong number of entities found, got %d, want 1", len(el))
+	}
+
+	w = bytes.NewBuffer(nil)
+	if err := e.SerializePrivate(w, nil); err != nil {
+		t.Errorf("failed to serialize entity second time: %s", err)
+		return
+	}
+
+	if !bytes.Equal(w.Bytes(), serialized) {
+		t.Errorf("results differed")
+	}
+}
+func TestNewEntity(t *testing.T) {
 
 	// Check bit-length with a config.
 	cfg := &packet.Config{RSABits: 1024}
-	e, err = NewEntity("Test User", "test", "test@example.com", cfg)
+	e, err := NewEntity("Test User", "test", "test@example.com", cfg)
 	if err != nil {
 		t.Errorf("failed to create entity: %s", err)
 		return
 	}
-	bl, err = e.PrimaryKey.BitLength()
+	bl, err := e.PrimaryKey.BitLength()
 	if err != nil {
 		t.Errorf("failed to find bit length: %s", err)
 	}
