@@ -30,20 +30,20 @@ import (
 // PrivateKey represents a possibly encrypted private key. See RFC 4880,
 // section 5.5.3.
 type PrivateKey struct {
-	// 5.5.3 fields
+	// Private-Key fields (5.5.3)
 	PublicKey
 	s2kType
-	s2kCount         byte // Version 5 only
+	s2kCount int // Version 5 only
 
 	// Optional fields
-	cipher           CipherFunction
-	mode             AEADMode
-	s2k              func(out, in []byte)
-	iv               []byte
+	cipher CipherFunction
+	mode   AEADMode
+	s2k    func(out, in []byte)
+	iv     []byte
 
-	keyMaterialCount [4]byte // Version 5 only
-	encryptedData []byte
-	Encrypted     bool // if true then the private key is unavailable until Decrypt has been called.
+	keyMaterialCount int // Version 5 only
+	encryptedData    []byte
+	Encrypted        bool // if true then the private key is unavailable until Decrypt has been called.
 
 	// An *{rsa|dsa|elgamal|ecdh|ecdsa|ed25519}.PrivateKey or
 	// crypto.Signer/crypto.Decrypter (Decryptor RSA only).
@@ -69,72 +69,6 @@ const (
 	s2kSHA1         s2kType = 254
 	s2kChecksum     s2kType = 255 // Forbidden for v5 keys
 )
-
-func NewRSAPrivateKey(creationTime time.Time, priv *rsa.PrivateKey) *PrivateKey {
-	pk := new(PrivateKey)
-	pk.PublicKey = *NewRSAPublicKey(creationTime, &priv.PublicKey)
-	pk.PrivateKey = priv
-	return pk
-}
-
-func NewDSAPrivateKey(creationTime time.Time, priv *dsa.PrivateKey) *PrivateKey {
-	pk := new(PrivateKey)
-	pk.PublicKey = *NewDSAPublicKey(creationTime, &priv.PublicKey)
-	pk.PrivateKey = priv
-	return pk
-}
-
-func NewElGamalPrivateKey(creationTime time.Time, priv *elgamal.PrivateKey) *PrivateKey {
-	pk := new(PrivateKey)
-	pk.PublicKey = *NewElGamalPublicKey(creationTime, &priv.PublicKey)
-	pk.PrivateKey = priv
-	return pk
-}
-
-func NewECDSAPrivateKey(creationTime time.Time, priv *ecdsa.PrivateKey) *PrivateKey {
-	pk := new(PrivateKey)
-	pk.PublicKey = *NewECDSAPublicKey(creationTime, &priv.PublicKey)
-	pk.PrivateKey = priv
-	return pk
-}
-
-// NewSignerPrivateKey creates a PrivateKey from a crypto.Signer that
-// implements RSA or ECDSA.
-func NewSignerPrivateKey(creationTime time.Time, signer crypto.Signer) *PrivateKey {
-	pk := new(PrivateKey)
-	// In general, the public Keys should be used as pointers. We still
-	// type-switch on the values, for backwards-compatibility.
-	switch pubkey := signer.Public().(type) {
-	case *rsa.PublicKey:
-		pk.PublicKey = *NewRSAPublicKey(creationTime, pubkey)
-	case rsa.PublicKey:
-		pk.PublicKey = *NewRSAPublicKey(creationTime, &pubkey)
-	case *ecdsa.PublicKey:
-		pk.PublicKey = *NewECDSAPublicKey(creationTime, pubkey)
-	case ecdsa.PublicKey:
-		pk.PublicKey = *NewECDSAPublicKey(creationTime, &pubkey)
-	case ed25519.PublicKey:
-		pk.PublicKey = *NewEdDSAPublicKey(creationTime, pubkey)
-	default:
-		panic("openpgp: unknown crypto.Signer type in NewSignerPrivateKey")
-	}
-	pk.PrivateKey = signer
-	return pk
-}
-
-func NewECDHPrivateKey(creationTime time.Time, priv *ecdh.PrivateKey) *PrivateKey {
-	pk := new(PrivateKey)
-	pk.PublicKey = *NewECDHPublicKey(creationTime, &priv.PublicKey)
-	pk.PrivateKey = priv
-	return pk
-}
-
-func NewEdDSAPrivateKey(creationTime time.Time, priv ed25519.PrivateKey) *PrivateKey {
-	pk := new(PrivateKey)
-	pk.PublicKey = *NewEdDSAPublicKey(creationTime, priv.Public().(ed25519.PublicKey))
-	pk.PrivateKey = priv
-	return pk
-}
 
 func (pk *PrivateKey) parse(r io.Reader) (err error) {
 	err = (&pk.PublicKey).parse(r)
@@ -206,19 +140,6 @@ func (pk *PrivateKey) parse(r io.Reader) (err error) {
 	return
 }
 
-// Dummy returns true if the private key is a dummy key. This is a GNU extension.
-func (pk *PrivateKey) Dummy() bool {
-	return pk.s2kParams.Dummy()
-}
-
-func mod64kHash(d []byte) uint16 {
-	var h uint16
-	for _, b := range d {
-		h += uint16(b)
-	}
-	return h
-}
-
 func (pk *PrivateKey) Serialize(w io.Writer) (err error) {
 	buf := bytes.NewBuffer(nil)
 	err = pk.PublicKey.serializeWithoutHeaders(buf)
@@ -258,6 +179,85 @@ func (pk *PrivateKey) Serialize(w io.Writer) (err error) {
 		return
 	}
 	return
+}
+
+func NewRSAPrivateKey(creationTime time.Time, priv *rsa.PrivateKey) *PrivateKey {
+	pk := new(PrivateKey)
+	pk.PublicKey = *NewRSAPublicKey(creationTime, &priv.PublicKey)
+	pk.PrivateKey = priv
+	return pk
+}
+
+func NewDSAPrivateKey(creationTime time.Time, priv *dsa.PrivateKey) *PrivateKey {
+	pk := new(PrivateKey)
+	pk.PublicKey = *NewDSAPublicKey(creationTime, &priv.PublicKey)
+	pk.PrivateKey = priv
+	return pk
+}
+
+func NewElGamalPrivateKey(creationTime time.Time, priv *elgamal.PrivateKey) *PrivateKey {
+	pk := new(PrivateKey)
+	pk.PublicKey = *NewElGamalPublicKey(creationTime, &priv.PublicKey)
+	pk.PrivateKey = priv
+	return pk
+}
+
+func NewECDSAPrivateKey(creationTime time.Time, priv *ecdsa.PrivateKey) *PrivateKey {
+	pk := new(PrivateKey)
+	pk.PublicKey = *NewECDSAPublicKey(creationTime, &priv.PublicKey)
+	pk.PrivateKey = priv
+	return pk
+}
+
+// NewSignerPrivateKey creates a PrivateKey from a crypto.Signer that
+// implements RSA or ECDSA.
+func NewSignerPrivateKey(creationTime time.Time, signer crypto.Signer) *PrivateKey {
+	pk := new(PrivateKey)
+	// In general, the public Keys should be used as pointers. We still
+	// type-switch on the values, for backwards-compatibility.
+	switch pubkey := signer.Public().(type) {
+	case *rsa.PublicKey:
+		pk.PublicKey = *NewRSAPublicKey(creationTime, pubkey)
+	case rsa.PublicKey:
+		pk.PublicKey = *NewRSAPublicKey(creationTime, &pubkey)
+	case *ecdsa.PublicKey:
+		pk.PublicKey = *NewECDSAPublicKey(creationTime, pubkey)
+	case ecdsa.PublicKey:
+		pk.PublicKey = *NewECDSAPublicKey(creationTime, &pubkey)
+	case ed25519.PublicKey:
+		pk.PublicKey = *NewEdDSAPublicKey(creationTime, pubkey)
+	default:
+		panic("openpgp: unknown crypto.Signer type in NewSignerPrivateKey")
+	}
+	pk.PrivateKey = signer
+	return pk
+}
+
+func NewECDHPrivateKey(creationTime time.Time, priv *ecdh.PrivateKey) *PrivateKey {
+	pk := new(PrivateKey)
+	pk.PublicKey = *NewECDHPublicKey(creationTime, &priv.PublicKey)
+	pk.PrivateKey = priv
+	return pk
+}
+
+func NewEdDSAPrivateKey(creationTime time.Time, priv ed25519.PrivateKey) *PrivateKey {
+	pk := new(PrivateKey)
+	pk.PublicKey = *NewEdDSAPublicKey(creationTime, priv.Public().(ed25519.PublicKey))
+	pk.PrivateKey = priv
+	return pk
+}
+
+// Dummy returns true if the private key is a dummy key. This is a GNU extension.
+func (pk *PrivateKey) Dummy() bool {
+	return pk.s2kParams.Dummy()
+}
+
+func mod64kHash(d []byte) uint16 {
+	var h uint16
+	for _, b := range d {
+		h += uint16(b)
+	}
+	return h
 }
 
 func (pk *PrivateKey) serializeDummy(w io.Writer) error {
