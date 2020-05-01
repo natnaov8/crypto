@@ -7,10 +7,11 @@ package packet
 import (
 	"crypto"
 	"crypto/rand"
-	"math/big"
 	"io"
+	"math/big"
 	"time"
 
+	"golang.org/x/crypto/openpgp/s2k"
 )
 
 // Config collects a number of parameters along with sensible defaults.
@@ -21,10 +22,12 @@ type Config struct {
 	Rand io.Reader
 	// DefaultHash is the default hash function to be used.
 	// If zero, SHA-256 is used.
-	DefaultHash crypto.Hash
+	DefaultHash     crypto.Hash
+	HashPreferences []uint8
 	// DefaultCipher is the cipher to be used.
 	// If zero, AES-128 is used.
-	DefaultCipher CipherFunction
+	DefaultCipher     CipherFunction
+	CipherPreferences []uint8
 	// Time returns the current time as the number of seconds since the
 	// epoch. If Time is nil, time.Now is used.
 	Time func() time.Time
@@ -77,11 +80,36 @@ func (c *Config) Hash() crypto.Hash {
 	return c.DefaultHash
 }
 
+func (c *Config) PreferredHashAlgorithms() []uint8 {
+	if c == nil {
+		return []uint8{}
+	}
+	preferences := c.HashPreferences
+	if len(preferences) == 0 && c.DefaultHash != 0 {
+		defaultHash, ok := s2k.HashToHashId(c.Hash())
+		if ok {
+			preferences = []uint8{defaultHash}
+		}
+	}
+	return preferences
+}
+
 func (c *Config) Cipher() CipherFunction {
 	if c == nil || uint8(c.DefaultCipher) == 0 {
 		return CipherAES128
 	}
 	return c.DefaultCipher
+}
+
+func (c *Config) PreferredSymmetricAlgorithms() []uint8 {
+	if c == nil {
+		return []uint8{}
+	}
+	preferences := c.CipherPreferences
+	if len(preferences) == 0 && c.DefaultCipher != 0 {
+		preferences = []uint8{uint8(c.DefaultCipher)}
+	}
+	return preferences
 }
 
 func (c *Config) Now() time.Time {
@@ -103,6 +131,20 @@ func (c *Config) PasswordHashIterations() int {
 		return 0
 	}
 	return c.S2KCount
+}
+
+func (c *Config) RSAModulusBits() int {
+	if c == nil || c.RSABits == 0 {
+		return 2048
+	}
+	return c.RSABits
+}
+
+func (c *Config) PublicKeyAlgorithm() PublicKeyAlgorithm {
+	if c == nil || c.Algorithm == 0 {
+		return PubKeyAlgoRSA
+	}
+	return c.Algorithm
 }
 
 func (c *Config) AEAD() *AEADConfig {

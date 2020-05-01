@@ -8,7 +8,8 @@ import "math/bits"
 // A nil AEADConfig is valid and results in all default values.
 type AEADConfig struct {
 	// The AEAD mode of operation.
-	DefaultMode AEADMode
+	DefaultMode         AEADMode
+	AEADModePreferences []uint8
 	// Amount of octets in each chunk of data
 	ChunkSize uint64
 }
@@ -24,6 +25,17 @@ func (conf *AEADConfig) Mode() AEADMode {
 		panic("AEAD mode unsupported")
 	}
 	return mode
+}
+
+func (conf *AEADConfig) PreferredAEADModes() []uint8 {
+	if conf == nil {
+		return []uint8{}
+	}
+	preferences := conf.AEADModePreferences
+	if len(preferences) == 0 && conf.DefaultMode != 0 {
+		preferences = []uint8{uint8(conf.Mode())}
+	}
+	return preferences
 }
 
 // ChunkSizeByte returns the byte indicating the chunk size. The effective

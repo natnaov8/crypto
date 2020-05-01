@@ -12,6 +12,29 @@ import (
 	"golang.org/x/crypto/openpgp/packet"
 )
 
+var hashes = []crypto.Hash{
+	crypto.MD5,
+	crypto.SHA1,
+	crypto.SHA224,
+	crypto.SHA256,
+	crypto.SHA384,
+	crypto.SHA512,
+}
+
+var ciphers = []packet.CipherFunction{
+	packet.Cipher3DES,
+	packet.CipherCAST5,
+	packet.CipherAES128,
+	packet.CipherAES192,
+	packet.CipherAES256,
+}
+
+var aeadModes = []packet.AEADMode{
+	packet.AEADModeEAX,
+	packet.AEADModeOCB,
+	packet.AEADModeExperimentalGCM,
+}
+
 func TestKeyExpiry(t *testing.T) {
 	kring, err := ReadKeyRing(readerFromHex(expiringKeyHex))
 	if err != nil {
@@ -448,27 +471,45 @@ func TestIdVerification(t *testing.T) {
 	}
 }
 
-func TestNewEntityWithPreferredHash(t *testing.T) {
-	c := &packet.Config{
-		DefaultHash: crypto.SHA256,
+func TestNewEntityWithDefaultHash(t *testing.T) {
+	for _, hash := range hashes {
+		c := &packet.Config{
+			DefaultHash: hash,
+		}
+		entity, err := NewEntity("Golang Gopher", "Test Key", "no-reply@golang.com", c)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, identity := range entity.Identities {
+			if len(identity.SelfSignature.PreferredHash) == 0 {
+				t.Fatal("didn't find a preferred hash in self signature")
+			}
+			ph := hashToHashId(c.DefaultHash)
+			if identity.SelfSignature.PreferredHash[0] != ph {
+				t.Fatalf("Expected preferred hash to be %d, got %d", ph, identity.SelfSignature.PreferredHash[0])
+			}
+		}
 	}
-	entity, err := NewEntity("Golang Gopher", "Test Key", "no-reply@golang.com", c)
+}
+
+func TestNewEntityWithEmptyPreferredHashes(t *testing.T) {
+	cfg := &packet.Config{
+		HashPreferences: []uint8{},
+	}
+	entity, err := NewEntity("Botvinnik", "1.e4", "tal@chess.com", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for _, identity := range entity.Identities {
-		if len(identity.SelfSignature.PreferredHash) == 0 {
-			t.Fatal("didn't find a preferred hash in self signature")
-		}
-		ph := hashToHashId(c.DefaultHash)
-		if identity.SelfSignature.PreferredHash[0] != ph {
-			t.Fatalf("Expected preferred hash to be %d, got %d", ph, identity.SelfSignature.PreferredHash[0])
+		if len(identity.SelfSignature.PreferredHash) != 0 {
+			t.Fatal("expected preferred hashes list to be empty")
 		}
 	}
 }
 
-func TestNewEntityWithoutPreferredHash(t *testing.T) {
+func TestNewEntityNilConfigPreferredHash(t *testing.T) {
 	entity, err := NewEntity("Golang Gopher", "Test Key", "no-reply@golang.com", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -499,26 +540,44 @@ func TestNewEntityCorrectName(t *testing.T) {
 	}
 }
 
-func TestNewEntityWithPreferredSymmetric(t *testing.T) {
-	c := &packet.Config{
-		DefaultCipher: packet.CipherAES256,
+func TestNewEntityWithDefaultCipher(t *testing.T) {
+	for _, cipher := range ciphers {
+		c := &packet.Config{
+			DefaultCipher: cipher,
+		}
+		entity, err := NewEntity("Golang Gopher", "Test Key", "no-reply@golang.com", c)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, identity := range entity.Identities {
+			if len(identity.SelfSignature.PreferredSymmetric) == 0 {
+				t.Fatal("didn't find a preferred cipher in self signature")
+			}
+			if identity.SelfSignature.PreferredSymmetric[0] != uint8(c.DefaultCipher) {
+				t.Fatalf("Expected preferred cipher to be %d, got %d", uint8(c.DefaultCipher), identity.SelfSignature.PreferredSymmetric[0])
+			}
+		}
 	}
-	entity, err := NewEntity("Golang Gopher", "Test Key", "no-reply@golang.com", c)
+}
+
+func TestNewEntityWithEmptyPreferredSymmetricAlgorithms(t *testing.T) {
+	cfg := &packet.Config{
+		CipherPreferences: []uint8{},
+	}
+	entity, err := NewEntity("Botvinnik", "1.e4", "tal@chess.com", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for _, identity := range entity.Identities {
-		if len(identity.SelfSignature.PreferredSymmetric) == 0 {
-			t.Fatal("didn't find a preferred cipher in self signature")
-		}
-		if identity.SelfSignature.PreferredSymmetric[0] != uint8(c.DefaultCipher) {
-			t.Fatalf("Expected preferred cipher to be %d, got %d", uint8(c.DefaultCipher), identity.SelfSignature.PreferredSymmetric[0])
+		if len(identity.SelfSignature.PreferredSymmetric) != 0 {
+			t.Fatal("expected preferred ciphers list to be empty")
 		}
 	}
 }
 
-func TestNewEntityWithoutPreferredSymmetric(t *testing.T) {
+func TestNewEntityNilConfigPreferredSymmetric(t *testing.T) {
 	entity, err := NewEntity("Golang Gopher", "Test Key", "no-reply@golang.com", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -531,10 +590,36 @@ func TestNewEntityWithoutPreferredSymmetric(t *testing.T) {
 	}
 }
 
-func TestNewEntityWithPreferredAead(t *testing.T) {
+func TestNewEntityWithDefaultAead(t *testing.T) {
+	for _, aeadMode := range aeadModes {
+		cfg := &packet.Config{
+			AEADConfig: &packet.AEADConfig{
+				DefaultMode: aeadMode,
+			},
+		}
+		entity, err := NewEntity("Botvinnik", "1.e4", "tal@chess.com", cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, identity := range entity.Identities {
+			if len(identity.SelfSignature.PreferredAEAD) == 0 {
+				t.Fatal("didn't find a preferred mode in self signature")
+			}
+			mode := identity.SelfSignature.PreferredAEAD[0]
+			if mode != uint8(cfg.AEAD().DefaultMode) {
+				t.Fatalf("Expected preferred mode to be %d, got %d",
+					uint8(cfg.AEAD().DefaultMode),
+					identity.SelfSignature.PreferredAEAD[0])
+			}
+		}
+	}
+}
+
+func TestNewEntityWithEmptyPreferredAeadModes(t *testing.T) {
 	cfg := &packet.Config{
 		AEADConfig: &packet.AEADConfig{
-			DefaultMode: packet.AEADModeEAX,
+			AEADModePreferences: []uint8{},
 		},
 	}
 	entity, err := NewEntity("Botvinnik", "1.e4", "tal@chess.com", cfg)
@@ -543,20 +628,13 @@ func TestNewEntityWithPreferredAead(t *testing.T) {
 	}
 
 	for _, identity := range entity.Identities {
-		if len(identity.SelfSignature.PreferredAEAD) == 0 {
-			t.Fatal("didn't find a preferred mode in self signature")
-		}
-		mode := identity.SelfSignature.PreferredAEAD[0]
-		if mode != uint8(cfg.AEAD().DefaultMode) {
-			t.Fatalf(
-				"Expected preferred mode to be %d, got %d",
-				uint8(cfg.AEAD().DefaultMode),
-				identity.SelfSignature.PreferredAEAD[0])
+		if len(identity.SelfSignature.PreferredAEAD) != 0 {
+			t.Fatal("expected AEAD modes list to be empty")
 		}
 	}
 }
 
-func TestNewEntityWithoutPreferredAead(t *testing.T) {
+func TestNewEntityNilConfigPreferredAead(t *testing.T) {
 	entity, err := NewEntity("Botvinnik", "1.e4", "tal@chess.com", nil)
 	if err != nil {
 		t.Fatal(err)
