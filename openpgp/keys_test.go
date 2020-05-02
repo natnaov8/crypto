@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/openpgp/armor"
 	"golang.org/x/crypto/openpgp/errors"
 	"golang.org/x/crypto/openpgp/packet"
+	"golang.org/x/crypto/openpgp/internal/algorithm"
 )
 
 var hashes = []crypto.Hash{
@@ -482,12 +483,13 @@ func TestNewEntityWithDefaultHash(t *testing.T) {
 		}
 
 		for _, identity := range entity.Identities {
-			if len(identity.SelfSignature.PreferredHash) == 0 {
-				t.Fatal("didn't find a preferred hash in self signature")
+			prefs := identity.SelfSignature.PreferredHash
+			if len(prefs) == 0 {
+				t.Fatal("didn't find a preferred hash list in self signature")
 			}
 			ph := hashToHashId(c.DefaultHash)
-			if identity.SelfSignature.PreferredHash[0] != ph {
-				t.Fatalf("Expected preferred hash to be %d, got %d", ph, identity.SelfSignature.PreferredHash[0])
+			if prefs[0] != ph {
+				t.Fatalf("Expected preferred hash to be %d, got %d", ph, prefs[0])
 			}
 		}
 	}
@@ -503,8 +505,9 @@ func TestNewEntityWithEmptyPreferredHashes(t *testing.T) {
 	}
 
 	for _, identity := range entity.Identities {
-		if len(identity.SelfSignature.PreferredHash) != 0 {
-			t.Fatal("expected preferred hashes list to be empty")
+		prefs := identity.SelfSignature.PreferredHash
+		if len(prefs) != 1 {
+			t.Fatal("expected preferred hashes list to be [SHA256]")
 		}
 	}
 }
@@ -516,8 +519,9 @@ func TestNewEntityNilConfigPreferredHash(t *testing.T) {
 	}
 
 	for _, identity := range entity.Identities {
-		if len(identity.SelfSignature.PreferredHash) != 0 {
-			t.Fatalf("Expected preferred hash to be empty but got length %d", len(identity.SelfSignature.PreferredHash))
+		prefs := identity.SelfSignature.PreferredHash
+		if len(prefs) != 1 {
+			t.Fatal("expected preferred hashes list to be [SHA256]")
 		}
 	}
 }
@@ -551,11 +555,12 @@ func TestNewEntityWithDefaultCipher(t *testing.T) {
 		}
 
 		for _, identity := range entity.Identities {
-			if len(identity.SelfSignature.PreferredSymmetric) == 0 {
-				t.Fatal("didn't find a preferred cipher in self signature")
+			prefs := identity.SelfSignature.PreferredSymmetric
+			if len(prefs) == 0 {
+				t.Fatal("didn't find a preferred cipher list")
 			}
-			if identity.SelfSignature.PreferredSymmetric[0] != uint8(c.DefaultCipher) {
-				t.Fatalf("Expected preferred cipher to be %d, got %d", uint8(c.DefaultCipher), identity.SelfSignature.PreferredSymmetric[0])
+			if prefs[0] != uint8(c.DefaultCipher) {
+				t.Fatalf("Expected preferred cipher to be %d, got %d", uint8(c.DefaultCipher), prefs[0])
 			}
 		}
 	}
@@ -571,8 +576,9 @@ func TestNewEntityWithEmptyPreferredSymmetricAlgorithms(t *testing.T) {
 	}
 
 	for _, identity := range entity.Identities {
-		if len(identity.SelfSignature.PreferredSymmetric) != 0 {
-			t.Fatal("expected preferred ciphers list to be empty")
+		prefs := identity.SelfSignature.PreferredSymmetric
+		if len(prefs) != 1 || prefs[0] != algorithm.AES128.Id() {
+			t.Fatal("expected preferred ciphers list to be [AES128]")
 		}
 	}
 }
@@ -584,8 +590,9 @@ func TestNewEntityNilConfigPreferredSymmetric(t *testing.T) {
 	}
 
 	for _, identity := range entity.Identities {
-		if len(identity.SelfSignature.PreferredSymmetric) != 0 {
-			t.Fatalf("Expected preferred cipher to be empty but got length %d", len(identity.SelfSignature.PreferredSymmetric))
+		prefs := identity.SelfSignature.PreferredSymmetric
+		if len(prefs) != 1 || prefs[0] != algorithm.AES128.Id() {
+			t.Fatal("expected preferred ciphers list to be [AES128]")
 		}
 	}
 }

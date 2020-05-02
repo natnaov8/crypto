@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"time"
 
+	"golang.org/x/crypto/openpgp/internal/algorithm"
 	"golang.org/x/crypto/openpgp/s2k"
 )
 
@@ -81,17 +82,15 @@ func (c *Config) Hash() crypto.Hash {
 }
 
 func (c *Config) PreferredHashAlgorithms() []uint8 {
-	if c == nil {
-		return []uint8{}
-	}
-	preferences := c.HashPreferences
-	if len(preferences) == 0 && c.DefaultHash != 0 {
-		defaultHash, ok := s2k.HashToHashId(c.Hash())
-		if ok {
-			preferences = []uint8{defaultHash}
+	if c != nil && c.DefaultHash != 0 {
+		mustId, _ := s2k.HashToHashId(crypto.SHA256)
+		id, ok := s2k.HashToHashId(c.DefaultHash)
+		if !ok || id == mustId {
+			return []uint8{mustId}
 		}
+		return []uint8{id, mustId}
 	}
-	return preferences
+	return c.sanitizedHashPreferences()
 }
 
 func (c *Config) Cipher() CipherFunction {
@@ -102,14 +101,15 @@ func (c *Config) Cipher() CipherFunction {
 }
 
 func (c *Config) PreferredSymmetricAlgorithms() []uint8 {
-	if c == nil {
-		return []uint8{}
+	if c != nil && c.DefaultCipher != 0 {
+		must := algorithm.AES128
+		cipher, ok := algorithm.CipherById[uint8(c.DefaultCipher)]
+		if !ok || cipher == must {
+			return []uint8{must.Id()}
+		}
+		return []uint8{cipher.Id(), must.Id()}
 	}
-	preferences := c.CipherPreferences
-	if len(preferences) == 0 && c.DefaultCipher != 0 {
-		preferences = []uint8{uint8(c.DefaultCipher)}
-	}
-	return preferences
+	return c.sanitizedCipherPreferences()
 }
 
 func (c *Config) Now() time.Time {
@@ -152,4 +152,51 @@ func (c *Config) AEAD() *AEADConfig {
 		return nil
 	}
 	return c.AEADConfig
+}
+
+// Ensures that the default cipher is included, and removes unsupported
+// algorithms.
+func (c *Config) sanitizedCipherPreferences() []uint8 {
+	defaultAlgo := algorithm.AES128
+	if c == nil {
+		return []uint8{defaultAlgo.Id()}
+	}
+	sanitized := make([]uint8, 0)
+	defaultPresent := false
+	for _, id := range c.CipherPreferences {
+		cipher, ok := algorithm.CipherById[id]
+		if ok {
+			sanitized = append(sanitized, id)
+		}
+		if cipher == defaultAlgo {
+			defaultPresent = true
+		}
+	}
+	if !defaultPresent {
+		sanitized = append(sanitized, defaultAlgo.Id())
+	}
+	return sanitized
+}
+
+// Ensures that the default hash is included and removes unsupported hashes.
+func (c *Config) sanitizedHashPreferences() []uint8 {
+	defaultId, _ := s2k.HashToHashId(crypto.SHA256)
+	if c == nil {
+		return []uint8{defaultId}
+	}
+	sanitized := make([]uint8, 0)
+	defaultPresent := false
+	for _, id := range c.HashPreferences {
+		_, ok := algorithm.HashById[id]
+		if ok {
+			sanitized = append(sanitized, id)
+		}
+		if id == defaultId {
+			defaultPresent = true
+		}
+	}
+	if !defaultPresent {
+		sanitized = append(sanitized, defaultId)
+	}
+	return sanitized
 }
