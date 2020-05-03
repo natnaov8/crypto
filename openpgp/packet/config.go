@@ -82,14 +82,6 @@ func (c *Config) Hash() crypto.Hash {
 }
 
 func (c *Config) PreferredHashAlgorithms() []uint8 {
-	if c != nil && c.DefaultHash != 0 {
-		mustId, _ := s2k.HashToHashId(crypto.SHA256)
-		id, ok := s2k.HashToHashId(c.DefaultHash)
-		if !ok || id == mustId {
-			return []uint8{mustId}
-		}
-		return []uint8{id, mustId}
-	}
 	return c.sanitizedHashPreferences()
 }
 
@@ -101,14 +93,6 @@ func (c *Config) Cipher() CipherFunction {
 }
 
 func (c *Config) PreferredSymmetricAlgorithms() []uint8 {
-	if c != nil && c.DefaultCipher != 0 {
-		must := algorithm.AES128
-		cipher, ok := algorithm.CipherById[uint8(c.DefaultCipher)]
-		if !ok || cipher == must {
-			return []uint8{must.Id()}
-		}
-		return []uint8{cipher.Id(), must.Id()}
-	}
 	return c.sanitizedCipherPreferences()
 }
 
@@ -157,46 +141,55 @@ func (c *Config) AEAD() *AEADConfig {
 // Ensures that the default cipher is included, and removes unsupported
 // algorithms.
 func (c *Config) sanitizedCipherPreferences() []uint8 {
-	defaultAlgo := algorithm.AES128
+	mustId:= algorithm.AES128.Id()
 	if c == nil {
-		return []uint8{defaultAlgo.Id()}
+		return []uint8{mustId}
+	}
+	if c.DefaultCipher != 0 {
+		c.CipherPreferences = []uint8{uint8(c.DefaultCipher)}
 	}
 	sanitized := make([]uint8, 0)
-	defaultPresent := false
+	mustPresent := false
 	for _, id := range c.CipherPreferences {
 		cipher, ok := algorithm.CipherById[id]
 		if ok {
 			sanitized = append(sanitized, id)
 		}
-		if cipher == defaultAlgo {
-			defaultPresent = true
+		if cipher.Id() == mustId {
+			mustPresent = true
 		}
 	}
-	if !defaultPresent {
-		sanitized = append(sanitized, defaultAlgo.Id())
+	if !mustPresent {
+		sanitized = append(sanitized, mustId)
 	}
 	return sanitized
 }
 
 // Ensures that the default hash is included and removes unsupported hashes.
 func (c *Config) sanitizedHashPreferences() []uint8 {
-	defaultId, _ := s2k.HashToHashId(crypto.SHA256)
+	mustId, _ := s2k.HashToHashId(crypto.SHA256)
 	if c == nil {
-		return []uint8{defaultId}
+		return []uint8{mustId}
+	}
+	if c.DefaultHash != 0 {
+		id, ok := s2k.HashToHashId(c.DefaultHash)
+		if ok {
+			c.HashPreferences = []uint8{id}
+		}
 	}
 	sanitized := make([]uint8, 0)
-	defaultPresent := false
+	mustPresent := false
 	for _, id := range c.HashPreferences {
 		_, ok := algorithm.HashById[id]
 		if ok {
 			sanitized = append(sanitized, id)
 		}
-		if id == defaultId {
-			defaultPresent = true
+		if id == mustId {
+			mustPresent = true
 		}
 	}
-	if !defaultPresent {
-		sanitized = append(sanitized, defaultId)
+	if !mustPresent {
+		sanitized = append(sanitized, mustId)
 	}
 	return sanitized
 }
